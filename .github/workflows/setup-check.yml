@@ -1,0 +1,27 @@
+name: Test website access and iPhone alert
+
+on:
+  workflow_dispatch:
+    inputs:
+      send_phone_test:
+        description: Send one 30-second audible Bark test to my iPhone
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  setup-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Check public cinema pages and optionally test phone
+        env:
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+          SEND_PHONE_TEST: ${{ inputs.send_phone_test }}
+        run: node setup-check.mjs
