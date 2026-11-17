@@ -1,16 +1,22 @@
-name: Scheduled District PXL alerts
+name: Dune IMAX Wadala ticket alerts
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - monitor.mjs
+      - monitor.test.mjs
+      - .github/workflows/monitor.yml
 permissions:
   contents: write
 concurrency:
-  group: district-pxl-monitor
+  group: dune-imax-wadala-monitor
   cancel-in-progress: false
 jobs:
   monitor:
     if: github.event.repository.fork == false
     runs-on: ubuntu-24.04
-    timeout-minutes: 8
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -18,9 +24,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm install --no-save --package-lock=false playwright@1.56.1
-      - run: npx playwright install --with-deps chromium
-      - name: Check exact District shows and notify
+      - run: node --test monitor.test.mjs
+      - name: Check exact District IMAX shows and notify
         env:
           BARK_KEY: ${{ secrets.BARK_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
