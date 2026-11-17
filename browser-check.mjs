@@ -16,6 +16,13 @@ try {
       await page.waitForTimeout(8000);
       const body = await page.locator('body').innerText({ timeout: 10000 });
       const structured = await page.locator('script[type="application/ld+json"]').allTextContents();
+      console.log('DOM_DIAGNOSTIC', JSON.stringify(await page.evaluate(() => {
+        const anchor = [...document.querySelectorAll('a[href*="-MV"]')].find(element => element.innerText.includes('Ramayana'));
+        const result = [];
+        let parent = anchor;
+        for (let depth = 0; parent && depth < 5; depth++, parent = parent.parentElement) result.push(parent.outerHTML.slice(0, 14000));
+        return result;
+      })));
       const links = await page.locator('a[href]').evaluateAll(elements => elements.map(element => ({ text: element.innerText, href: element.getAttribute('href') })).filter(item => /seat|movie|show/i.test(item.href)).slice(0, 50));
       const blocked = response?.status() === 403 || /verify you are human|access denied|just a moment|unusual traffic|captcha/i.test(body);
       const venue = /oberoi/i.test(body) && /goregaon/i.test(body);
