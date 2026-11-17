@@ -1,11 +1,14 @@
 name: Dune IMAX Wadala ticket alerts
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '3,13,23,33,43,53 * * * *'
   push:
     branches: [main]
     paths:
       - monitor.mjs
       - monitor.test.mjs
+      - ticketnew.mjs
       - .github/workflows/monitor.yml
 permissions:
   contents: write
