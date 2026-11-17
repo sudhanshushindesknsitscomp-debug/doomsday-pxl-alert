@@ -124,8 +124,9 @@ async function run() {
     if (!districtMatches && !ticketMatches && !mirajMatches) {
       throw new Error(`All checks failed: District ${districtError?.message}; TicketNew ${ticketError?.message}; Miraj ${mirajError?.message}`);
     }
-    const source = mirajMatches?.length ? 'Miraj' : ticketMatches?.length ? 'TicketNew' : 'District';
-    const sessions = mirajMatches?.length ? mirajMatches : ticketMatches?.length ? ticketMatches : districtMatches || [];
+    const source = mirajMatches?.length ? 'Miraj' : ticketMatches?.length ? 'TicketNew' :
+      districtMatches?.length ? 'District' : mirajMatches ? 'Miraj' : ticketMatches ? 'TicketNew' : 'District';
+    const sessions = source === 'Miraj' ? mirajMatches : source === 'TicketNew' ? ticketMatches : districtMatches;
     const fresh = sessions.filter(session => !state.seen.includes(session.id));
     const wasBroken = state.broken;
     const previousFailures = state.failures || 0;
