@@ -1,4 +1,5 @@
 import { appendFile } from 'node:fs/promises';
+import { ticketnewSessions, ticketnewUrl } from './ticketnew.mjs';
 
 const endpoint = 'https://mcp-server.district.in/v2/mcp';
 const tokenEndpoint = 'https://mcp-server.district.in/v2/token';
@@ -83,14 +84,14 @@ async function saveState(state, sha) {
   if (!response.ok) throw new Error(`GitHub state save: HTTP ${response.status}`);
 }
 
-async function bark(title, body, critical = false) {
+async function bark(title, body, critical = false, url = bookingUrl) {
   if (dryRun) return;
   const key = process.env.BARK_KEY?.trim();
   if (!key) throw new Error('BARK_KEY secret is missing');
   const response = await fetch('https://api.day.app/push', {
     method: 'POST', signal: AbortSignal.timeout(20000),
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ device_key: key, title, body, url: bookingUrl, group: 'dune-imax-wadala',
+    body: JSON.stringify({ device_key: key, title, body, url, group: 'dune-imax-wadala',
       level: critical ? 'critical' : 'active', sound: critical ? 'alarm' : 'bell' }),
   });
   if (!response.ok || (await response.json()).code !== 200) throw new Error(`Bark rejected alert: HTTP ${response.status}`);
@@ -100,20 +101,31 @@ async function run() {
   if (Date.now() >= Date.parse('2026-12-19T00:00:00+05:30')) return 'Target day passed; monitor retired.';
   const { state, sha } = await githubState();
   try {
-    const token = await guestToken();
-    const discovered = await districtCall(token, 1, 'search', {
-      query: 'Get all showtimes at cinema 1038682 on December 18 2026', limit: 10,
-    });
-    if (!discovered.results?.some(item => item.operation === 'consumer.cinema_showtimes' && item.call_with === 'execute')) {
-      throw new Error('District cinema showtimes operation is unavailable');
+    let token, cinema, districtMatches, ticketMatches;
+    let districtError, ticketError;
+    try {
+      token = await guestToken();
+      const discovered = await districtCall(token, 1, 'search', {
+        query: 'Get all showtimes at cinema 1038682 on December 18 2026', limit: 10,
+      });
+      if (!discovered.results?.some(item => item.operation === 'consumer.cinema_showtimes' && item.call_with === 'execute')) {
+        throw new Error('District cinema showtimes operation is unavailable');
+      }
+      cinema = await districtCall(token, 2, 'execute', {
+        operation: 'consumer.cinema_showtimes', arguments: { cinema_id: cinemaId, date: showDate },
+      });
+      districtMatches = matchesCinema(cinema);
+    } catch (error) { districtError = error; }
+    try { ticketMatches = await ticketnewSessions(); }
+    catch (error) { ticketError = error; }
+    if (!districtMatches && !ticketMatches) {
+      throw new Error(`Both checks failed: District ${districtError?.message}; TicketNew ${ticketError?.message}`);
     }
-    const cinema = await districtCall(token, 2, 'execute', {
-      operation: 'consumer.cinema_showtimes', arguments: { cinema_id: cinemaId, date: showDate },
-    });
-    const sessions = matchesCinema(cinema);
+    const source = ticketMatches?.length ? 'TicketNew' : 'District';
+    const sessions = ticketMatches?.length ? ticketMatches : districtMatches || [];
     const fresh = sessions.filter(session => !state.seen.includes(session.id));
     const wasBroken = state.broken;
-    if (fresh.length) {
+    if (fresh.length && source === 'District') {
       const search = await districtCall(token, 3, 'search', {
         query: `View seats for movie session ${sessions[0].id} at cinema ${cinemaId} without holding seats`, limit: 10,
       });
@@ -126,19 +138,22 @@ async function run() {
       if (map.show?.movie !== 'Dune: Part Three' || map.show?.language !== 'English' ||
           map.show?.cinema !== cinema.cinema.name || map.show?.screen?.toUpperCase() !== 'IMAX' ||
           !Array.isArray(map.areas)) throw new Error('First IMAX show seat map did not verify');
+    }
+    if (fresh.length) {
       await bark('Dune Part Three IMAX Wadala listed!',
-        `Dec 18, Miraj IMAX Wadala. First English IMAX show: ${sessions[0].start_time.slice(11, 16)} IST. ${fresh.length} new session(s). Open District to book; adjacent seats and checkout need confirmation.`, true);
+        `Dec 18, Miraj IMAX Wadala. First English IMAX show: ${sessions[0].start_time.slice(11, 16)} IST. ${fresh.length} new session(s) on ${source}. Check three dead-center seats and complete booking.`,
+        true, source === 'TicketNew' ? ticketnewUrl : bookingUrl);
       state.seen = [...new Set([...state.seen, ...fresh.map(session => session.id)])];
     }
     if (state.broken) {
-      await bark('Dune IMAX checks recovered', 'District checks are working again.');
+      await bark('Dune IMAX checks recovered', `${source} listing checks are working again.`);
       state.broken = false;
     }
     if (fresh.length || wasBroken) await saveState(state, sha);
-    return `District OK: ${sessions.length} English IMAX session(s), ${fresh.length} new. First: ${sessions[0]?.start_time || 'none'}.`;
+    return `${source} OK: ${sessions.length} English IMAX session(s), ${fresh.length} new. First: ${sessions[0]?.start_time || 'none'}. ${districtError ? `District MCP unavailable: ${districtError.message}.` : ''} ${ticketError ? `TicketNew unavailable: ${ticketError.message}.` : ''}`;
   } catch (error) {
     if (!state.broken) {
-      await bark('Dune IMAX alert needs attention', `District check failed: ${error.message}. Check listings manually.`);
+      await bark('Dune IMAX alert needs attention', `Both listing checks failed: ${error.message}. Check listings manually.`);
       state.broken = true;
       await saveState(state, sha);
     }
