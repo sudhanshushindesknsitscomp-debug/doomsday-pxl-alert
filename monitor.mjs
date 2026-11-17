@@ -1,164 +1,159 @@
-import { chromium } from 'playwright';
 import { appendFile } from 'node:fs/promises';
 
-const targetDate = '2026-12-17';
-const cinemaUrl = 'https://www.district.in/movies/hdfc-millennia-pvr-icon-oberoi-mall-goregaon-e-CD1018530';
-const targetUrl = `${cinemaUrl}?fromdate=${targetDate}`;
+const endpoint = 'https://mcp-server.district.in/v2/mcp';
+const tokenEndpoint = 'https://mcp-server.district.in/v2/token';
+const clientId = 'mcpc_YnX45e1pT1csWstvJIinLFog'; // public guest OAuth client ID
+const movieId = '207332';
+const cinemaId = '1038682';
+const showDate = '2026-12-18';
+const bookingUrl = 'https://www.district.in/movies/dune-part-three-movie-tickets-in-mumbai-MV207332?fromdate=2026-12-18';
+const dryRun = process.env.DRY_RUN === 'true';
 const repository = process.env.GITHUB_REPOSITORY;
-const stateUrl = `https://api.github.com/repos/${repository}/contents/monitor-state.json`;
-const headers = { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json' };
 
-async function notify(title, body, urgent = false, url = targetUrl) {
-  if (process.env.DRY_RUN === 'true') return;
-  if (!process.env.BARK_KEY) throw new Error('BARK_KEY is missing');
-  const response = await fetch('https://api.day.app/push', {
-    method: 'POST', signal: AbortSignal.timeout(20000),
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ device_key: process.env.BARK_KEY.trim(), title, body, url,
-      group: 'doomsday-pxl', level: urgent ? 'critical' : 'active',
-      sound: urgent ? 'alarm' : 'bell', ...(urgent ? { call: '1' } : {}) }),
-  });
-  if (!response.ok || (await response.json()).code !== 200) throw new Error('Bark delivery request failed');
+function rpcBody(body) {
+  const lines = body.split(/\r?\n/).filter(line => line.startsWith('data:'));
+  return JSON.parse(lines.length ? lines.map(line => line.slice(5).trim()).join('\n') : body);
 }
 
-async function readState() {
-  const response = await fetch(stateUrl, { headers, signal: AbortSignal.timeout(20000) });
-  if (response.status === 404) return { state: { seen: {}, failures: 0 }, sha: undefined };
-  if (!response.ok) throw new Error('Cannot read persistent alert state');
-  const result = await response.json();
-  return { state: JSON.parse(Buffer.from(result.content, 'base64').toString()), sha: result.sha };
+async function districtCall(token, id, name, args) {
+  const response = await fetch(endpoint, {
+    method: 'POST', signal: AbortSignal.timeout(30000),
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json',
+      accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id, method: 'tools/call', params: { name, arguments: args } }),
+  });
+  const raw = await response.text();
+  if (!response.ok) throw new Error(`District ${name}: HTTP ${response.status}`);
+  const result = rpcBody(raw);
+  if (result.error || result.result?.isError) throw new Error(`District ${name} failed: ${JSON.stringify(result.error || result.result?.content).slice(0, 200)}`);
+  const text = result.result?.content?.find(item => item.type === 'text')?.text;
+  if (!text) throw new Error(`District ${name} returned no data`);
+  return JSON.parse(text);
+}
+
+async function guestToken() {
+  const response = await fetch(tokenEndpoint, {
+    method: 'POST', signal: AbortSignal.timeout(20000),
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'urn:district:params:oauth:grant-type:guest',
+      client_id: clientId, scope: 'district', resource: endpoint }),
+  });
+  if (!response.ok) throw new Error(`District guest login: HTTP ${response.status}`);
+  const token = (await response.json()).access_token;
+  if (!token) throw new Error('District guest login returned no token');
+  return token;
+}
+
+export function matchesCinema(data) {
+  if (data.cinema?.id !== cinemaId || data.date !== showDate || !Array.isArray(data.movies)) {
+    throw new Error('District cinema/date response was incomplete or mismatched');
+  }
+  const movie = data.movies.find(item => item.id === movieId && /^Dune:\s*Part Three$/i.test(item.name));
+  if (!movie) return [];
+  if (!Array.isArray(movie.sessions)) throw new Error('Dune listing has no session list');
+  return movie.sessions.filter(session =>
+    typeof session.id === 'string' && session.start_time?.startsWith(`${showDate}T`) &&
+    session.start_time?.endsWith('+05:30') && session.language?.toLowerCase() === 'english' &&
+    (session.screen?.toUpperCase() === 'IMAX' || session.premium_label?.toUpperCase() === 'IMAX')
+  ).sort((a, b) => a.start_time.localeCompare(b.start_time));
+}
+
+async function githubState() {
+  if (dryRun || !repository) return { state: { seen: [], broken: false }, sha: undefined };
+  const response = await fetch(`https://api.github.com/repos/${repository}/contents/monitor-state.json`, {
+    signal: AbortSignal.timeout(20000),
+    headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json' },
+  });
+  if (response.status === 404) return { state: { seen: [], broken: false }, sha: undefined };
+  if (!response.ok) throw new Error(`GitHub state read: HTTP ${response.status}`);
+  const file = await response.json();
+  const state = JSON.parse(Buffer.from(file.content, 'base64').toString('utf8'));
+  return { state: Array.isArray(state.seen) ? state : { seen: [], broken: false }, sha: file.sha };
 }
 
 async function saveState(state, sha) {
-  if (process.env.DRY_RUN === 'true') return;
-  const response = await fetch(stateUrl, {
-    method: 'PUT', headers: { ...headers, 'content-type': 'application/json' },
-    signal: AbortSignal.timeout(20000),
-    body: JSON.stringify({ message: 'Update ticket monitor state', sha,
+  if (dryRun || !repository) return;
+  const response = await fetch(`https://api.github.com/repos/${repository}/contents/monitor-state.json`, {
+    method: 'PUT', signal: AbortSignal.timeout(20000),
+    headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json',
+      'content-type': 'application/json' },
+    body: JSON.stringify({ message: 'Record Dune IMAX alert state', sha,
       content: Buffer.from(JSON.stringify(state, null, 2)).toString('base64') }),
   });
-  if (!response.ok) throw new Error('Cannot save alert state; notifications may repeat');
+  if (!response.ok) throw new Error(`GitHub state save: HTTP ${response.status}`);
 }
 
-async function inspect(page, url) {
-  const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  await page.waitForTimeout(8000);
-  const text = await page.locator('body').innerText();
-  if (!response?.ok() || /verify you are human|access denied|just a moment|you have been blocked/i.test(text)) throw new Error('District access blocked');
-  if (!/Oberoi Mall, Goregaon/i.test(text)) throw new Error('Expected cinema missing');
-  const data = await page.evaluate(() => {
-    const events = [];
-    function walk(value) {
-      if (Array.isArray(value)) value.forEach(walk);
-      else if (value && typeof value === 'object') {
-        if (value['@type'] === 'ScreeningEvent') events.push(value);
-        if (value['@graph']) walk(value['@graph']);
-      }
-    }
-    for (const script of document.querySelectorAll('script[type="application/ld+json"]')) {
-      try { walk(JSON.parse(script.textContent)); } catch {}
-    }
-    const cards = [];
-    for (const anchor of document.querySelectorAll('a[href*="-MV"]')) {
-      const header = anchor.innerText;
-      if (!header.trim()) continue;
-      let parent = anchor.parentElement;
-      while (parent && parent !== document.body) {
-        const times = parent.innerText.match(/\b\d{1,2}:\d{2}\s*[AP]M\b/g) || [];
-        const movies = new Set([...parent.querySelectorAll('a[href*="-MV"]')].map(item => item.getAttribute('href')));
-        if (movies.size > 1) break;
-        if (times.length) {
-          const shows = [];
-          for (const element of parent.querySelectorAll('*')) {
-            if (!/^\d{1,2}:\d{2}\s*[AP]M$/.test(element.innerText?.trim() || '')) continue;
-            if ([...element.children].some(child => /^\d{1,2}:\d{2}\s*[AP]M$/.test(child.innerText?.trim() || ''))) continue;
-            let tile = element;
-            let pxl = false;
-            while (tile && tile !== parent) {
-              const tileTimes = tile.innerText.match(/\b\d{1,2}:\d{2}\s*[AP]M\b/g) || [];
-              if (tileTimes.length !== 1) break;
-              if (/(?:\bPXL\b|P\[XL\])/i.test(tile.innerText)) pxl = true;
-              tile = tile.parentElement;
-            }
-            shows.push({ time: element.innerText.trim(), pxl });
-          }
-          cards.push({ header, shows });
-          break;
-        }
-        parent = parent.parentElement;
-      }
-    }
-    return { events, cards };
+async function bark(title, body, critical = false) {
+  if (dryRun) return;
+  const key = process.env.BARK_KEY?.trim();
+  if (!key) throw new Error('BARK_KEY secret is missing');
+  const response = await fetch('https://api.day.app/push', {
+    method: 'POST', signal: AbortSignal.timeout(20000),
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ device_key: key, title, body, url: bookingUrl, group: 'dune-imax-wadala',
+      level: critical ? 'critical' : 'active', sound: critical ? 'alarm' : 'bell' }),
   });
-  return { ...data, empty: text.includes('No shows playing at the moment') };
+  if (!response.ok || (await response.json()).code !== 200) throw new Error(`Bark rejected alert: HTTP ${response.status}`);
 }
 
-function matches(data) {
-  const card = data.cards.find(item => /^Avengers\s*:\s*Doomsday\s*\n/i.test(item.header) && /\|\s*English\b/i.test(item.header));
-  if (!card) {
-    if (data.events.some(event => /Avengers.*Doomsday/i.test(event.workPresented?.name || ''))) throw new Error('Doomsday found but language/show cards could not be verified');
-    return [];
-  }
-  return data.events.filter(event => {
-    if (!/^Avengers\s*:\s*Doomsday$/i.test(event.workPresented?.name || '')) return false;
-    if (!event.startDate?.startsWith(targetDate) || !event.startDate.endsWith('+05:30')) return false;
-    if (!event.location?.url?.includes('CD1018530')) return false;
-    const time = new Date(event.startDate).toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: true });
-    return card.shows.some(show => show.pxl && show.time.replace(/\s/g, '') === time.replace(/\s/g, ''));
-  }).map(event => ({
-    start: event.startDate,
-    url: event.offers?.url,
-    status: /\/(InStock|LimitedAvailability)$/.test(event.offers?.availability || '') ? 'bookable' : 'listed',
-  })).filter(show => {
-    try { const url = new URL(show.url); return url.hostname === 'www.district.in' && url.pathname.startsWith('/movies/seat-layout/'); } catch { return false; }
-  }).sort((left, right) => left.start.localeCompare(right.start));
-}
-
-const { state, sha } = await readState();
-const before = JSON.stringify(state);
-let browser;
-let summary;
-try {
-  if (Date.now() >= Date.parse('2026-12-18T00:00:00+05:30')) {
-    summary = 'Target date passed. Monitoring retired; no website requests made.';
-  } else {
-    browser = await chromium.launch();
-    const context = await browser.newContext({ locale: 'en-IN', timezoneId: 'Asia/Kolkata' });
-    const page = await context.newPage();
-    const current = await inspect(page, cinemaUrl);
-    if (!current.events.length || !current.cards.some(card => card.shows.some(show => show.pxl))) throw new Error('Current-show control failed: cannot validate PXL extraction');
-    const target = await inspect(page, targetUrl);
-    if (!target.events.length && !target.empty) throw new Error('Target page has neither shows nor explicit empty state');
-    if (target.events.some(event => !event.startDate?.startsWith(targetDate))) throw new Error('District returned a different date');
-    const shows = matches(target);
-    const fresh = shows.filter(show => state.seen[show.url] !== show.status);
-    if (fresh.length) {
-      const first = shows[0];
-      await notify('Doomsday English PXL on District', fresh.map(show => `${show.start.slice(11, 16)} IST: ${show.status}`).join('\n') + '\nOberoi Mall, Goregaon — December 17. Earliest listed matching show: ' + first.start.slice(11, 16) + ' IST. Two adjacent seats not verified.', true, fresh[0].url);
-      for (const show of fresh) state.seen[show.url] = show.status;
+async function run() {
+  if (Date.now() >= Date.parse('2026-12-19T00:00:00+05:30')) return 'Target day passed; monitor retired.';
+  const { state, sha } = await githubState();
+  try {
+    const token = await guestToken();
+    const discovered = await districtCall(token, 1, 'search', {
+      query: 'Get all showtimes at cinema 1038682 on December 18 2026', limit: 10,
+    });
+    if (!discovered.results?.some(item => item.operation === 'consumer.cinema_showtimes' && item.call_with === 'execute')) {
+      throw new Error('District cinema showtimes operation is unavailable');
     }
-    state.failures = 0;
+    const cinema = await districtCall(token, 2, 'execute', {
+      operation: 'consumer.cinema_showtimes', arguments: { cinema_id: cinemaId, date: showDate },
+    });
+    const sessions = matchesCinema(cinema);
+    const fresh = sessions.filter(session => !state.seen.includes(session.id));
+    const wasBroken = state.broken;
+    if (fresh.length) {
+      const search = await districtCall(token, 3, 'search', {
+        query: `View seats for movie session ${sessions[0].id} at cinema ${cinemaId} without holding seats`, limit: 10,
+      });
+      if (!search.results?.some(item => item.operation === 'consumer.movie_select_seat' && item.call_with === 'execute')) {
+        throw new Error('District seat map operation is unavailable');
+      }
+      const map = await districtCall(token, 4, 'execute', {
+        operation: 'consumer.movie_select_seat', arguments: { cinema_id: cinemaId, session_id: sessions[0].id },
+      });
+      if (map.show?.movie !== 'Dune: Part Three' || map.show?.language !== 'English' ||
+          map.show?.cinema !== cinema.cinema.name || map.show?.screen?.toUpperCase() !== 'IMAX' ||
+          !Array.isArray(map.areas)) throw new Error('First IMAX show seat map did not verify');
+      await bark('Dune Part Three IMAX Wadala listed!',
+        `Dec 18, Miraj IMAX Wadala. First English IMAX show: ${sessions[0].start_time.slice(11, 16)} IST. ${fresh.length} new session(s). Open District to book; adjacent seats and checkout need confirmation.`, true);
+      state.seen = [...new Set([...state.seen, ...fresh.map(session => session.id)])];
+    }
     if (state.broken) {
-      await notify('PXL monitor recovered', 'District checks are working again. BookMyShow remains unsupported.');
+      await bark('Dune IMAX checks recovered', 'District checks are working again.');
       state.broken = false;
     }
-    if (!state.started) {
-      await notify('PXL monitoring enabled', 'District-only checks are now scheduled every 10 minutes, subject to GitHub delays. No matching tickets found unless a separate ticket alert arrives.');
-      state.started = true;
+    if (fresh.length || wasBroken) await saveState(state, sha);
+    return `District OK: ${sessions.length} English IMAX session(s), ${fresh.length} new. First: ${sessions[0]?.start_time || 'none'}.`;
+  } catch (error) {
+    if (!state.broken) {
+      await bark('Dune IMAX alert needs attention', `District check failed: ${error.message}. Check listings manually.`);
+      state.broken = true;
+      await saveState(state, sha);
     }
-    summary = `District current-show control passed. Target: ${targetDate}, English Avengers: Doomsday, Oberoi PXL. Matching shows: ${shows.length}; new/changed alerts: ${fresh.length}. BookMyShow not monitored.`;
+    throw error;
   }
-} catch (error) {
-  state.failures = (state.failures || 0) + 1;
-  summary = `Check failed: ${error.message}. This is NOT a no-tickets result.`;
-  if (!state.broken) {
-    await notify('PXL monitor needs attention', summary).then(() => { state.broken = true; }).catch(() => {});
+}
+
+if (process.argv[1]?.endsWith('monitor.mjs')) {
+  try {
+    const summary = await run();
+    console.log(summary);
+    if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, `${summary}\n`);
+  } catch (error) {
+    console.error(`Ticket alert failed: ${error.message}`);
+    process.exitCode = 1;
   }
-  process.exitCode = 1;
-} finally {
-  if (browser) await browser.close();
-  if (before !== JSON.stringify(state)) await saveState(state, sha);
-  console.log(summary);
-  if (process.env.GITHUB_STEP_SUMMARY) await appendFile(process.env.GITHUB_STEP_SUMMARY, summary + '\n');
 }
 
