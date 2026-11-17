@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { matchesCinema } from './monitor.mjs';
 import { parseTicketnew } from './ticketnew.mjs';
+import { parseMiraj } from './miraj.mjs';
 
 const cinema = {
   cinema: { id: '1038682' }, date: '2026-12-18',
@@ -51,3 +52,23 @@ test('TicketNew checks booking status, cinema, IMAX screen, and IST date', () =>
   assert.deepEqual(parseTicketnew(ticketnewHtml('Coming Soon')), []);
 });
 
+test('Miraj requires Dune, English IMAX, target date and at least three seats', () => {
+  const listing = { status: true, data: { cinemaDetails: { Cinema_strID: '0074', Cinema_strName: 'Miraj Cinemas IMAX Wadala' },
+    sessionDetails: [
+      { name: '(3D) Dune: Part Three (English) (IMAX)', language_name: 'English', timing: [
+        { id: 101, time: '2026-12-18 07:00:00.000', seats_available_for_sale: 3 },
+        { id: 102, time: '2026-12-18 08:00:00.000', seats_available_for_sale: 2 },
+        { id: 103, time: '2026-12-19 09:00:00.000', seats_available_for_sale: 20 },
+      ] },
+      { name: 'Dune: Part Three (English)', language_name: 'English', timing: [
+        { id: 104, time: '2026-12-18 06:00:00.000', seats_available_for_sale: 20 },
+      ] },
+      { name: 'Dune: Part Three (Hindi) (IMAX)', language_name: 'Hindi', timing: [
+        { id: 105, time: '2026-12-18 05:00:00.000', seats_available_for_sale: 20 },
+      ] },
+    ] } };
+  assert.deepEqual(parseMiraj(listing).map(show => [show.id, show.start_time]),
+    [['101', '2026-12-18T07:00:00+05:30']]);
+  assert.throws(() => parseMiraj({ ...listing, data: { ...listing.data,
+    cinemaDetails: { Cinema_strID: '0075', Cinema_strName: 'Other cinema' } } }));
+});
