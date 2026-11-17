@@ -1,5 +1,6 @@
 import { appendFile } from 'node:fs/promises';
 import { ticketnewSessions, ticketnewUrl } from './ticketnew.mjs';
+import { mirajSessions, mirajBookingUrl } from './miraj.mjs';
 
 const endpoint = 'https://mcp-server.district.in/v2/mcp';
 const tokenEndpoint = 'https://mcp-server.district.in/v2/token';
@@ -101,8 +102,8 @@ async function run() {
   if (Date.now() >= Date.parse('2026-12-19T00:00:00+05:30')) return 'Target day passed; monitor retired.';
   const { state, sha } = await githubState();
   try {
-    let token, cinema, districtMatches, ticketMatches;
-    let districtError, ticketError;
+    let token, cinema, districtMatches, ticketMatches, mirajMatches;
+    let districtError, ticketError, mirajError;
     try {
       token = await guestToken();
       const discovered = await districtCall(token, 1, 'search', {
@@ -118,11 +119,13 @@ async function run() {
     } catch (error) { districtError = error; }
     try { ticketMatches = await ticketnewSessions(); }
     catch (error) { ticketError = error; }
-    if (!districtMatches && !ticketMatches) {
-      throw new Error(`Both checks failed: District ${districtError?.message}; TicketNew ${ticketError?.message}`);
+    try { mirajMatches = await mirajSessions(); }
+    catch (error) { mirajError = error; }
+    if (!districtMatches && !ticketMatches && !mirajMatches) {
+      throw new Error(`All checks failed: District ${districtError?.message}; TicketNew ${ticketError?.message}; Miraj ${mirajError?.message}`);
     }
-    const source = ticketMatches?.length ? 'TicketNew' : 'District';
-    const sessions = ticketMatches?.length ? ticketMatches : districtMatches || [];
+    const source = mirajMatches?.length ? 'Miraj' : ticketMatches?.length ? 'TicketNew' : 'District';
+    const sessions = mirajMatches?.length ? mirajMatches : ticketMatches?.length ? ticketMatches : districtMatches || [];
     const fresh = sessions.filter(session => !state.seen.includes(session.id));
     const wasBroken = state.broken;
     const previousFailures = state.failures || 0;
@@ -143,7 +146,7 @@ async function run() {
     if (fresh.length) {
       await bark('Dune Part Three IMAX Wadala listed!',
         `Dec 18, Miraj IMAX Wadala. First English IMAX show: ${sessions[0].start_time.slice(11, 16)} IST. ${fresh.length} new session(s) on ${source}. Check three dead-center seats and complete booking.`,
-        true, source === 'TicketNew' ? ticketnewUrl : bookingUrl);
+        true, source === 'Miraj' ? mirajBookingUrl : source === 'TicketNew' ? ticketnewUrl : bookingUrl);
       state.seen = [...new Set([...state.seen, ...fresh.map(session => session.id)])];
     }
     if (state.broken) {
@@ -152,7 +155,7 @@ async function run() {
     }
     state.failures = 0;
     if (fresh.length || wasBroken || previousFailures) await saveState(state, sha);
-    return `${source} OK: ${sessions.length} English IMAX session(s), ${fresh.length} new. First: ${sessions[0]?.start_time || 'none'}. ${districtError ? `District MCP unavailable: ${districtError.message}.` : ''} ${ticketError ? `TicketNew unavailable: ${ticketError.message}.` : ''}`;
+    return `${source} OK: ${sessions.length} English IMAX session(s), ${fresh.length} new. First: ${sessions[0]?.start_time || 'none'}. ${districtError ? `District MCP unavailable: ${districtError.message}.` : ''} ${ticketError ? `TicketNew unavailable: ${ticketError.message}.` : ''} ${mirajError ? `Miraj unavailable: ${mirajError.message}.` : ''}`;
   } catch (error) {
     state.failures = (state.failures || 0) + 1;
     if (state.failures >= 3 && !state.broken) {
@@ -174,4 +177,3 @@ if (process.argv[1]?.endsWith('monitor.mjs')) {
     process.exitCode = 1;
   }
 }
-
