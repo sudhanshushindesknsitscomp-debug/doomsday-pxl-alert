@@ -1,0 +1,34 @@
+name: Scheduled District PXL alerts
+on:
+  schedule:
+    - cron: '3,13,23,33,43,53 * * * *'
+  workflow_dispatch:
+  push:
+    paths:
+      - monitor.mjs
+      - .github/workflows/monitor.yml
+permissions:
+  contents: write
+concurrency:
+  group: district-pxl-monitor
+  cancel-in-progress: false
+jobs:
+  monitor:
+    if: github.event.repository.fork == false
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --no-save --package-lock=false playwright@1.56.1
+      - run: npx playwright install --with-deps chromium
+      - name: Check exact District shows and notify
+        env:
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node monitor.mjs
+
