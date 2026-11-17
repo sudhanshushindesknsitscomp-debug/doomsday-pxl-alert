@@ -60,16 +60,16 @@ export function matchesCinema(data) {
 }
 
 async function githubState() {
-  if (dryRun || !repository) return { state: { seen: [], broken: false }, sha: undefined };
+  if (dryRun || !repository) return { state: { seen: [], broken: false, failures: 0 }, sha: undefined };
   const response = await fetch(`https://api.github.com/repos/${repository}/contents/monitor-state.json`, {
     signal: AbortSignal.timeout(20000),
     headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: 'application/vnd.github+json' },
   });
-  if (response.status === 404) return { state: { seen: [], broken: false }, sha: undefined };
+  if (response.status === 404) return { state: { seen: [], broken: false, failures: 0 }, sha: undefined };
   if (!response.ok) throw new Error(`GitHub state read: HTTP ${response.status}`);
   const file = await response.json();
   const state = JSON.parse(Buffer.from(file.content, 'base64').toString('utf8'));
-  return { state: Array.isArray(state.seen) ? state : { seen: [], broken: false }, sha: file.sha };
+  return { state: Array.isArray(state.seen) ? { failures: 0, ...state } : { seen: [], broken: false, failures: 0 }, sha: file.sha };
 }
 
 async function saveState(state, sha) {
@@ -125,6 +125,7 @@ async function run() {
     const sessions = ticketMatches?.length ? ticketMatches : districtMatches || [];
     const fresh = sessions.filter(session => !state.seen.includes(session.id));
     const wasBroken = state.broken;
+    const previousFailures = state.failures || 0;
     if (fresh.length && source === 'District') {
       const search = await districtCall(token, 3, 'search', {
         query: `View seats for movie session ${sessions[0].id} at cinema ${cinemaId} without holding seats`, limit: 10,
@@ -149,14 +150,16 @@ async function run() {
       await bark('Dune IMAX checks recovered', `${source} listing checks are working again.`);
       state.broken = false;
     }
-    if (fresh.length || wasBroken) await saveState(state, sha);
+    state.failures = 0;
+    if (fresh.length || wasBroken || previousFailures) await saveState(state, sha);
     return `${source} OK: ${sessions.length} English IMAX session(s), ${fresh.length} new. First: ${sessions[0]?.start_time || 'none'}. ${districtError ? `District MCP unavailable: ${districtError.message}.` : ''} ${ticketError ? `TicketNew unavailable: ${ticketError.message}.` : ''}`;
   } catch (error) {
-    if (!state.broken) {
-      await bark('Dune IMAX alert needs attention', `Both listing checks failed: ${error.message}. Check listings manually.`);
+    state.failures = (state.failures || 0) + 1;
+    if (state.failures >= 3 && !state.broken) {
+      await bark('Dune IMAX alert needs attention', `Three consecutive listing checks failed. Latest: ${error.message}. Check listings manually.`);
       state.broken = true;
-      await saveState(state, sha);
     }
+    await saveState(state, sha);
     throw error;
   }
 }
