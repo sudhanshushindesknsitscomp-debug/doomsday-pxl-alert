@@ -1,6 +1,10 @@
 name: Test website access and iPhone alert
 
 on:
+  push:
+    paths:
+      - '.github/workflows/setup-check.yml'
+      - 'setup-check.mjs'
   workflow_dispatch:
     inputs:
       send_phone_test:
