@@ -1,12 +1,6 @@
 name: Scheduled District PXL alerts
 on:
-  schedule:
-    - cron: '3,13,23,33,43,53 * * * *'
   workflow_dispatch:
-  push:
-    paths:
-      - monitor.mjs
-      - .github/workflows/monitor.yml
 permissions:
   contents: write
 concurrency:
