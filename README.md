@@ -1,31 +1,23 @@
-# Free PXL alert: setup test
+# Dune: Part Three — Miraj IMAX Wadala alert
 
-Status: NOT an active monitor. This package only checks cloud access and optionally sends one audible iPhone test. It does not buy or reserve tickets.
+This public repository checks for *Dune: Part Three* on **18 December 2026** at **Miraj Cinemas : IMAX, Wadala**, in **English** and on the **IMAX auditorium**. When a matching session first appears, it sends a Bark push to the iPhone associated with the repository's `BARK_KEY` Actions secret. The message identifies the earliest matching show. The intended booking is **three dead-center seats** in the first show. No seat hold or purchase is automated.
 
-Target: Avengers: Doomsday, English, December 17, 2026 (Asia/Kolkata), specifically PXL at PVR ICON Oberoi Mall, Goregaon East, Mumbai. The eventual monitor should identify the earliest listed matching show and notify if an earlier show is added. Two adjacent centre seats roughly two-thirds back are a preference, not a reason to delay the opening alert. No other auditorium, language, date or venue is a substitute.
+The workflow runs every ten minutes (UTC minute 3, 13, 23, 33, 43, 53) and can also be run manually from GitHub Actions. It checks District's official guest MCP showtimes and TicketNew's public Miraj cinema listing. A listing counts only when the exact movie, cinema, date, language and IMAX screen match. For TicketNew, its booking status must be `Bookings Open` and the session must have seats available. The monitor stores alerted session IDs in `monitor-state.json` to avoid repeat alarms. If both sources fail three times in a row, Bark sends a health warning; it sends a recovery notice when checks resume.
 
-## Setup
+## Current limits
 
-1. Create a new public GitHub repository named `doomsday-pxl-alert`. Standard GitHub-hosted Actions runners in public repositories are free. Public means the code and workflow logs are visible to anyone. Never put account credentials, phone keys or personal data in those files. Private repositories have a limited free monthly Actions allowance.
-2. Add the files in this folder at the repository root, preserving `.github/workflows/setup-check.yml`. Uploading only the ZIP will not install a workflow. If the file picker hides `.github`, use GitHub's Add file > Create new file and enter `.github/workflows/setup-check.yml` as the filename.
-3. Install Bark on your iPhone: https://apps.apple.com/in/app/bark-custom-notifications/id1403753865 . Enable notifications and Critical Alerts. No donation is required.
-4. Bark shows a personal URL like `https://api.day.app/YOUR_KEY/...`. Copy only YOUR_KEY into GitHub Settings > Secrets and variables > Actions > New repository secret, named `BARK_KEY`. Do not paste this key in chat, public files or screenshots.
-5. Go to Actions > Test website access and iPhone alert > Run workflow. Tick the phone test only when ready for a 30-second audible notification. Lock your phone to test delivery. Enabling Critical Alerts may allow sound through Silent/Focus modes.
-6. Read the run summary. A green workflow means the test ran; it does NOT mean monitoring works. Share the summary without secrets so the exact show parser and schedule can be finished after access is verified.
+- GitHub's cloud IPs sometimes receive HTTP 403 from both District and TicketNew. A green run proves that one check worked; a failed run means there was no reliable answer. This monitor is best effort and cannot guarantee an alarm at the instant booking opens.
+- BookMyShow is not monitored because its cloud checks were blocked. You can still book there manually if it lists the target first.
+- GitHub schedule runs can be delayed or occasionally dropped. The Windows computer can remain off.
+- Bark's critical push depends on the phone's notification settings and connectivity. It is not a persistent Clock alarm.
+- The workflow cannot confirm three adjacent dead-center seats from the listing alone. Open the booking page and check the seat map. Purchase and payment require your approval and any OTP/CAPTCHA the ticketing site requests.
 
-## Important limitations
+The repository name is left unchanged to preserve existing links and the `BARK_KEY` secret. The old Doomsday workflow is no longer the target.
 
-- No recurring schedule is included yet. Your computer can be off while this manual GitHub test runs.
-- Both ticket sites may block cloud requests. The test reports that rather than claiming there are no tickets. It does not bypass challenges.
-- Public cinema-page URLs are starting points, not confirmed movie/session IDs. Their response structure and selected date require validation.
-- Before enabling monitoring, test strict matching against wrong movie/language/date/auditorium, sold-out and listed-only shows, parsing failures, and repeated observations. Alert separately for first listing and confirmed booking availability.
-- GitHub scheduled jobs can be delayed or dropped. No guaranteed immediate alert, continuous alarm or unattended purchase is promised.
-- Bark's 30-second sound is not a Clock alarm and is not Pushover's acknowledged retry feature. Any future retry mechanism needs its own bounded retries and stop control.
-- Notification keys belong only in GitHub Secrets. Only the test text is sent to Bark. No booking-site login or payment details are needed for this test.
+## Links
 
-## References
+- [District movie page](https://www.district.in/movies/dune-part-three-movie-tickets-in-mumbai-MV207332)
+- [District cinema page](https://www.district.in/movies/miraj-cinemas-imax-wadala-mumbai-CD1038682?fromdate=2026-12-18)
+- [TicketNew cinema page](https://ticketnew.com/movies/greater-mumbai/miraj-cinemas-imax-wadala-c/1038682?fromdate=2026-12-18)
+- [GitHub Actions](https://github.com/sudhanshushindesknsitscomp-debug/doomsday-pxl-alert/actions)
 
-- https://docs.github.com/en/billing/concepts/product-billing/github-actions
-- https://docs.github.com/en/actions/how-tos/troubleshoot-workflows
-- https://github.com/Finb/Bark
-- https://github.com/aculix/ticket-monitoring
