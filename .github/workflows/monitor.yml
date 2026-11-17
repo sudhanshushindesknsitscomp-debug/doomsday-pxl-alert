@@ -33,4 +33,21 @@ jobs:
           BARK_KEY: ${{ secrets.BARK_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node monitor.mjs
+  fallback:
+    needs: monitor
+    if: ${{ always() && needs.monitor.result == 'failure' && github.event.repository.fork == false }}
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Retry from Windows runner
+        env:
+          BARK_KEY: ${{ secrets.BARK_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node monitor.mjs
 
