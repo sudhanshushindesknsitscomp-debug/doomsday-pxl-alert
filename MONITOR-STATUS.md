@@ -1,10 +1,10 @@
-# Monitoring status
+# Monitor status — Dune IMAX Wadala
 
-Automatic scheduling is disabled pending reliable District access and exact show-card extraction validation. The manual monitor workflow is experimental, not production-ready.
+Target: Dune: Part Three, English, Miraj Cinemas : IMAX, Wadala, 18 December 2026. Three dead-center seats in the earliest IMAX show are the booking preference.
 
-Confirmed: Bark notifications reach the user's iPhone. Standard Chromium on GitHub successfully loaded District on earlier runs, including current PXL shows. Later runs received HTTP 403 from District, so this path is not reliable. BookMyShow also returns 403.
+District MCP currently reports the movie as `coming_soon` with release date 2026-12-18 and no matching sessions. The cinema is District ID `1038682`; the movie is District ID `207332`.
 
-The first monitor run failed its positive control: exact PXL extraction could not be validated against current shows. It correctly sent an attention warning rather than claiming no tickets. Subsequent browser diagnostics were blocked by District. Do not enable a schedule until both access stability and positive/negative matching tests pass.
+The GitHub schedule is configured every ten minutes. The local live check returned zero matching sessions. Matching tests cover wrong cinema, language, screen and date, plus TicketNew's booking-open gate. GitHub live runs have been intermittent: one completed successfully, while another received HTTP 403 from both District and TicketNew. This is a best-effort alert, not guaranteed monitoring. Failure warnings go to Bark after three consecutive failed checks.
 
-The prepared monitor uses strict movie/date/venue/language/PXL conditions, persists notification state in monitor-state.json and does not purchase or reserve tickets. Its future scheduled use remains unverified. No guaranteed alarms for booking openings are currently provided.
+The earlier Doomsday PXL alert target is retired because the user has already booked it. The workflow does not hold or purchase seats.
 
