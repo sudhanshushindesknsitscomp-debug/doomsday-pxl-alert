@@ -9,6 +9,7 @@ on:
       - monitor.mjs
       - monitor.test.mjs
       - ticketnew.mjs
+      - miraj.mjs
       - .github/workflows/monitor.yml
 permissions:
   contents: write
@@ -28,7 +29,7 @@ jobs:
         with:
           node-version: '22'
       - run: node --test monitor.test.mjs
-      - name: Check exact District IMAX shows and notify
+      - name: Check Dune English IMAX shows and notify
         env:
           BARK_KEY: ${{ secrets.BARK_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
@@ -50,4 +51,3 @@ jobs:
           BARK_KEY: ${{ secrets.BARK_KEY }}
           GITHUB_TOKEN: ${{ github.token }}
         run: node monitor.mjs
-
